@@ -1,0 +1,197 @@
+{
+  "scenario_id": "conservation_mesh_demo_v2",
+
+  "_readme": [
+    "scenario.json — DEFAULT quick-start: python battery_simulator.py --overwrite",
+    "Single relay hop (S1–S3 → R1 → CMD1), 72 h, 42 events. Full §2 mesh exercise + two-hop LoRa: scenario_spec_complete.json.",
+    "Top-level _keys stripped before run; nested _… fields are docs-only. See SIMULATOR.md → Where inputs and outputs live."
+  ],
+
+  "_documentation": {
+    "handoff": "Combined simulator bundle for separate-repository sharing per supervisor direction.",
+    "spec_alignment": "Variable names follow Energy Spec (battery sim doc.md §2–§3). Implementation matches combined simulator §3.1–§3.2 baseline behaviour.",
+    "what_controls_energy": [
+      "duration_hours × timestep builds baseline Wh each interval.",
+      "Each event triggers WiFi TX on originating Shaman I, then WiFi RX / LoRa RX / process / LoRa TX up the tree.",
+      "avg_retries_per_tx scales §3.2 retry term E_retry on each upstream LoRa hop (fractional mean-field)."
+    ],
+    "explicit_scalars_vs_components": "Scalar keys under shaman_i / shaman_ii override GUI-style components{} after derivation — numbers below match components so either alone is sufficient.",
+    "computed_airtime_note": "t_tx_lora is NOT input — simulator computes Semtech LoRa airtime from spreading_factor, bandwidth_hz, coding_rate, packet_bytes (printed to full_result.json radio.airtime_per_frame_ms)."
+  },
+
+  "duration_hours": 72,
+  "time_step_seconds": 3600,
+  "gateway_externally_powered": true,
+  "tx_only_if_confirmed": false,
+
+  "shaman_i": {
+    "_battery_reference": "E_battery ↔ batteryLife / battery_wh (55 Wh illustrative acoustic pod)",
+    "_baseline_equation": "§3.1 E_baseline = (P_proc_shaI_active + P_mic) × T",
+    "_event_tx_equation": "§3.1 E_tx += P_wifi_tx × t_tx_wifi × frames_per_hop per uplink",
+
+    "batteryLife": 55,
+
+    "P_mic": 0.00198,
+    "P_mic_off": 0.00033,
+    "P_proc_shaI_active": 0.528,
+    "P_proc_shaI_sleep": 0.00264,
+    "P_wifi_tx": 0.726,
+    "t_tx_wifi": 0.005,
+    "t_proc_shaI": 0.03,
+
+    "_unused_by_current_baseline": [
+      "P_mic_off, P_proc_shaI_sleep, t_proc_shaI appear in §2 energy-state list; baseline §3.1 uses activeproc + mic only. Simulator accepts them for future extensions."
+    ],
+
+    "components": {
+      "_maps_to_equations": {
+        "micListen_ma_v": "0.6 mA @ 3.3 V → P_mic W",
+        "working_ma_v": "160 mA @ 3.3 V → P_proc_shaI_active W",
+        "transmit_ma_v": "220 mA @ 3.3 V → P_wifi_tx W"
+      },
+      "micListen": { "current": 0.6, "voltage": 3.3 },
+      "working": { "current": 160, "voltage": 3.3 },
+      "transmit": { "current": 220, "voltage": 3.3 }
+    }
+  },
+
+  "shaman_ii": {
+    "_battery_reference": "75 Wh field relay box — survives dense forwarding load over multi-day demo",
+    "_baseline_equation": "§3.2 E_baseline = (P_controller_sleep + P_lora_rx + P_proc_shaII_sleep) × T",
+
+    "batteryLife": 75,
+
+    "P_proc_shaII_active": 3.5,
+    "P_proc_shaII_sleep": 0.5,
+    "P_controller_active": 0.528,
+    "P_controller_sleep": 0.00264,
+    "P_lora_tx": 0.389,
+    "P_lora_rx": 0.0198,
+    "P_wifi_rx": 0.33,
+    "P_backoff": 0.0198,
+    "t_proc_shaII": 0.01,
+    "t_rx_wifi": 0.005,
+    "t_backoff": 0.1,
+
+    "_timing_derived": "t_tx_lora per frame from radio Semtech formula (SF/BW/payload); simulator applies × frames_per_hop per LoRa hop. LoRa RX duration uses same airtime when receiving child relay packets.",
+
+    "components": {
+      "_maps_to_equations": {
+        "sleep_W": "P_proc_shaII_sleep",
+        "working_W": "P_proc_shaII_active",
+        "transmit_W": "P_lora_tx",
+        "receive_W": "P_lora_rx"
+      },
+      "sleep": { "power": 0.5 },
+      "working": { "power": 3.5 },
+      "transmit": { "power": 0.389 },
+      "receive": { "power": 0.0198 }
+    }
+  },
+
+  "radio": {
+    "_protocol_reference": "§2.4 frames_per_hop (MAC data + ACK + handshake); SF/BW → LoRa symbol period",
+
+    "packet_bytes": 128,
+    "spreading_factor": 10,
+    "bandwidth_hz": 125000,
+    "coding_rate": 5,
+    "preamble_symbols": 8,
+    "frames_per_hop": 3,
+    "avg_retries_per_tx": 0.12,
+
+    "_computed_nominal_ms_at_defaults": {
+      "airtime_per_frame_ms": 1230.848,
+      "t_hop_lora_ms": 3692.544,
+      "formula_note": "Approximate; simulator recomputes float — compare full_result.json radio.airtime_per_frame_ms after run."
+    }
+  },
+
+  "nodes": [
+    {
+      "_role_note": "COMMAND — externally powered → zero drain when gateway_externally_powered=true",
+      "node_id": "CMD1",
+      "node_type": "Command Center",
+      "parent_id": null,
+      "child_ids": ["R1"]
+    },
+    {
+      "_role_note": "RELAY — aggregates WiFi from three sensors; forwards LoRa toward CMD1",
+      "node_id": "R1",
+      "node_type": "Shaman II",
+      "parent_id": "CMD1",
+      "child_ids": ["S1", "S2", "S3"]
+    },
+    {
+      "_role_note": "SENSOR leaf — baseline + WiFi TX per processed event",
+      "node_id": "S1",
+      "node_type": "Shaman I",
+      "parent_id": "R1",
+      "child_ids": []
+    },
+    {
+      "node_id": "S2",
+      "node_type": "Shaman I",
+      "parent_id": "R1",
+      "child_ids": []
+    },
+    {
+      "node_id": "S3",
+      "node_type": "Shaman I",
+      "parent_id": "R1",
+      "child_ids": []
+    }
+  ],
+
+  "events": [
+    { "node_id": "S1", "time": 900, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S2", "time": 1800, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 3600, "confirmed": false, "event_type": "vehicle_candidate" },
+    { "node_id": "S1", "time": 7200, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S2", "time": 10800, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 14400, "confirmed": true, "event_type": "chainsaw_confirmed" },
+    { "node_id": "S1", "time": 21600, "confirmed": false, "event_type": "bird_candidate" },
+    { "node_id": "S2", "time": 25200, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 28800, "confirmed": true, "event_type": "heavy_rain_confirmed" },
+    { "node_id": "S1", "time": 36000, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S2", "time": 43200, "confirmed": false, "event_type": "insect_candidate" },
+    { "node_id": "S3", "time": 46800, "confirmed": true, "event_type": "human_voice_confirmed" },
+    { "node_id": "S1", "time": 54000, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S2", "time": 61200, "confirmed": true, "event_type": "chainsaw_confirmed" },
+    { "node_id": "S3", "time": 64800, "confirmed": false, "event_type": "wind_candidate" },
+    { "node_id": "S1", "time": 72000, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S2", "time": 75600, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 82800, "confirmed": true, "event_type": "vehicle_confirmed" },
+    { "node_id": "S2", "time": 90000, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S1", "time": 97200, "confirmed": false, "event_type": "unknown_candidate" },
+    { "node_id": "S3", "time": 100800, "confirmed": true, "event_type": "explosion_confirmed" },
+    { "node_id": "S2", "time": 108000, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S1", "time": 115200, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S3", "time": 122400, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S2", "time": 129600, "confirmed": false, "event_type": "aircraft_candidate" },
+    { "node_id": "S1", "time": 136800, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 144000, "confirmed": true, "event_type": "gunfire_confirmed" },
+    { "node_id": "S2", "time": 151200, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S1", "time": 158400, "confirmed": false, "event_type": "insect_candidate" },
+    { "node_id": "S3", "time": 165600, "confirmed": true, "event_type": "vehicle_confirmed" },
+    { "node_id": "S2", "time": 172800, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S1", "time": 180000, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S3", "time": 187200, "confirmed": true, "event_type": "thunder_confirmed" },
+    { "node_id": "S2", "time": 194400, "confirmed": true, "event_type": "chainsaw_confirmed" },
+    { "node_id": "S1", "time": 201600, "confirmed": false, "event_type": "water_candidate" },
+    { "node_id": "S3", "time": 216000, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S2", "time": 223200, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S1", "time": 230400, "confirmed": true, "event_type": "gunshot_confirmed" },
+    { "node_id": "S3", "time": 237600, "confirmed": true, "event_type": "motor_confirmed" },
+    { "node_id": "S2", "time": 246000, "confirmed": false, "event_type": "rustle_candidate" },
+    { "node_id": "S1", "time": 252000, "confirmed": true, "event_type": "species_confirmed" },
+    { "node_id": "S3", "time": 259140, "confirmed": true, "event_type": "shutdown_confirmed" }
+  ],
+
+  "_event_summary": {
+    "total_events": 42,
+    "synthetic_story": "Three acoustic sensors over 72 h with realistic biodiversity / threat labels — confirmed vs candidate mix stresses relay forwarding without implying species-ID accuracy.",
+    "approx_mix": "~34 confirmed, ~8 candidates — all still transmit because tx_only_if_confirmed=false (toggle to match uplink policy).",
+    "last_event_before_horizon": "259140 s (< 259200 s) keeps final hourly SOC sample meaningful."
+  }
+}

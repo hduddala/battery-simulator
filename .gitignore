@@ -1,0 +1,19 @@
+# Local environment
+.venv/
+venv/
+
+# Regenerated simulation outputs
+output/
+output_spec/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp

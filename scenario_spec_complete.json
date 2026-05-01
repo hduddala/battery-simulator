@@ -1,0 +1,459 @@
+{
+  "scenario_id": "spec_complete_mesh_two_hop_v1",
+  "_readme": [
+    "scenario_spec_complete.json \u2014 exercises Energy Spec \u00a72\u2013\u00a73 variables with a TWO-HOP relay chain.",
+    "Topology: S1\u2013S3 \u2192 R2 (WiFi) \u2192 R1 (LoRa) \u2192 CMD1 (externally powered). Uses n_received_wifi on R2 and n_received_lora on R1.",
+    "Run: python battery_simulator.py --scenario scenario_spec_complete.json --overwrite --out-dir output_spec",
+    "Default scenario.json remains the simpler single-relay 72 h demo."
+  ],
+  "_battery_variables_doc": {
+    "E_battery_Wh": "batteryLife / battery_wh on each role",
+    "V_Q_example_for_ShaI": "3.7 V \u00d7 ~14.86 Ah \u2248 55 Wh (illustrative pack sizing only \u2014 simulator uses Wh)",
+    "V_Q_example_for_ShaII": "7.4 V \u00d7 ~10.14 Ah \u2248 75 Wh (illustrative)",
+    "T_hours": "duration_hours",
+    "T_battery_life_after_run": "See full_result.json nodes[*].summary.projected_*_life_hours"
+  },
+  "duration_hours": 96.0,
+  "time_step_seconds": 1800,
+  "gateway_externally_powered": true,
+  "tx_only_if_confirmed": false,
+  "shaman_i": {
+    "_spec_section": "\u00a72.1 Shaman I \u2014 all JSON-settable powers/times",
+    "battery_wh": 55,
+    "batteryLife": 55,
+    "P_mic": 0.00198,
+    "P_mic_off": 0.00033,
+    "P_proc_shaI_active": 0.528,
+    "P_proc_shaI_sleep": 0.00264,
+    "P_wifi_tx": 0.726,
+    "t_tx_wifi": 0.005,
+    "t_proc_shaI": 0.03,
+    "components": {
+      "micListen": {
+        "current": 0.6,
+        "voltage": 3.3
+      },
+      "micSleep": {
+        "power": 0.00033
+      },
+      "sleep": {
+        "power": 0.00264
+      },
+      "working": {
+        "current": 160,
+        "voltage": 3.3
+      },
+      "transmit": {
+        "current": 220,
+        "voltage": 3.3
+      }
+    }
+  },
+  "shaman_ii": {
+    "_spec_section": "\u00a72.2 Shaman II \u2014 includes controllerActive mapping",
+    "battery_wh": 75,
+    "batteryLife": 75,
+    "P_proc_shaII_active": 3.5,
+    "P_proc_shaII_sleep": 0.5,
+    "P_controller_active": 0.528,
+    "P_controller_sleep": 0.00264,
+    "P_lora_tx": 0.389,
+    "P_lora_rx": 0.0198,
+    "P_wifi_rx": 0.33,
+    "P_backoff": 0.0198,
+    "t_proc_shaII": 0.01,
+    "t_rx_wifi": 0.005,
+    "t_backoff": 0.1,
+    "components": {
+      "sleep": {
+        "power": 0.5
+      },
+      "working": {
+        "power": 3.5
+      },
+      "transmit": {
+        "power": 0.389
+      },
+      "receive": {
+        "power": 0.0198
+      },
+      "controllerActive": {
+        "current": 160,
+        "voltage": 3.3
+      }
+    }
+  },
+  "radio": {
+    "_spec_section": "\u00a72.4 protocol \u2014 SF/BW/CR/payload \u2192 t_tx_lora computed in engine",
+    "packet_bytes": 128,
+    "spreading_factor": 10,
+    "bandwidth_hz": 125000,
+    "coding_rate": 5,
+    "preamble_symbols": 8,
+    "frames_per_hop": 3,
+    "avg_retries_per_tx": 0.18
+  },
+  "nodes": [
+    {
+      "node_id": "CMD1",
+      "node_type": "Command Center",
+      "parent_id": null,
+      "child_ids": [
+        "R1"
+      ],
+      "_role": "gateway externally powered"
+    },
+    {
+      "node_id": "R1",
+      "node_type": "Shaman II",
+      "parent_id": "CMD1",
+      "child_ids": [
+        "R2"
+      ],
+      "_role": "backhaul relay \u2014 receives LoRa from R2"
+    },
+    {
+      "node_id": "R2",
+      "node_type": "Shaman II",
+      "parent_id": "R1",
+      "child_ids": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "_role": "edge relay \u2014 receives WiFi from sensors"
+    },
+    {
+      "node_id": "S1",
+      "node_type": "Shaman I",
+      "parent_id": "R2",
+      "child_ids": []
+    },
+    {
+      "node_id": "S2",
+      "node_type": "Shaman I",
+      "parent_id": "R2",
+      "child_ids": []
+    },
+    {
+      "node_id": "S3",
+      "node_type": "Shaman I",
+      "parent_id": "R2",
+      "child_ids": []
+    }
+  ],
+  "events": [
+    {
+      "node_id": "S1",
+      "time": 23326.44,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 28303.09,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 29007.75,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 29544.47,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 40949.21,
+      "confirmed": true,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 42774.34,
+      "confirmed": false,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 47681.93,
+      "confirmed": true,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S2",
+      "time": 62487.85,
+      "confirmed": false,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 64701.18,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 70760.97,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 91527.19,
+      "confirmed": true,
+      "event_type": "insect_candidate"
+    },
+    {
+      "node_id": "S3",
+      "time": 96808.07,
+      "confirmed": true,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 100170.91,
+      "confirmed": false,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 106859.87,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 111673.82,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 114513.87,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 120387.19,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 128342.22,
+      "confirmed": false,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S1",
+      "time": 133691.61,
+      "confirmed": false,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S3",
+      "time": 136106.21,
+      "confirmed": true,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 151001.34,
+      "confirmed": true,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 156226.14,
+      "confirmed": true,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 157743.58,
+      "confirmed": true,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 167143.2,
+      "confirmed": false,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 168775.46,
+      "confirmed": false,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 185167.39,
+      "confirmed": true,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 193909.1,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 194800.91,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 197812.75,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 203357.0,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 220019.25,
+      "confirmed": true,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 220988.29,
+      "confirmed": true,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S1",
+      "time": 222196.08,
+      "confirmed": true,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S1",
+      "time": 235992.79,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 243684.34,
+      "confirmed": false,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 246245.79,
+      "confirmed": true,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 253776.44,
+      "confirmed": true,
+      "event_type": "insect_candidate"
+    },
+    {
+      "node_id": "S2",
+      "time": 264215.3,
+      "confirmed": false,
+      "event_type": "thunder_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 270570.13,
+      "confirmed": true,
+      "event_type": "insect_candidate"
+    },
+    {
+      "node_id": "S3",
+      "time": 279834.12,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 280233.41,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 291653.6,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 293082.98,
+      "confirmed": true,
+      "event_type": "gunshot_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 300648.84,
+      "confirmed": true,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 302616.82,
+      "confirmed": true,
+      "event_type": "chainsaw_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 312176.35,
+      "confirmed": true,
+      "event_type": "vehicle_candidate"
+    },
+    {
+      "node_id": "S1",
+      "time": 321206.73,
+      "confirmed": true,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S3",
+      "time": 325427.3,
+      "confirmed": true,
+      "event_type": "species_confirmed"
+    },
+    {
+      "node_id": "S2",
+      "time": 331735.14,
+      "confirmed": false,
+      "event_type": "motor_confirmed"
+    },
+    {
+      "node_id": "S1",
+      "time": 341957.24,
+      "confirmed": true,
+      "event_type": "insect_candidate"
+    },
+    {
+      "node_id": "S1",
+      "time": 345540.0,
+      "confirmed": false,
+      "event_type": "insect_candidate"
+    },
+    {
+      "node_id": "S2",
+      "time": 345420.0,
+      "confirmed": true,
+      "event_type": "insect_candidate"
+    }
+  ]
+}
