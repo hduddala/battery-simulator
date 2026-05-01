@@ -8,6 +8,7 @@ Core handoff files:
 | **`scenario.json`** | **Default** demo: one relay hop, **72 h**, 42 events — easiest charts |
 | **`scenario_spec_complete.json`** | **Spec-heavy** dataset: **two relay hops** (WiFi → LoRa → LoRa), **96 h**, 52 events, every §2 field + `controllerActive` / extra components |
 | **`SIMULATOR.md`** | This document — math, variables, where outputs live |
+| **`docs/`** | Ivonne **`variables_equations.md`** & **`simulation_loop.md`** (+ **[docs/README.md](docs/README.md)**) |
 
 Energy is in **watt-hours (Wh)**. Power **P** [W], time **t** [s]: **Wh = P × t / 3600**.
 
