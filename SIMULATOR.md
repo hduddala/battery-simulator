@@ -13,7 +13,7 @@ Energy is in **watt-hours (Wh)**. Power **P** [W], time **t** [s]: **Wh = P × t
 
 ### Repository handoff (supervisor direction)
 
-Single combined program suitable for its **own small repository**: one Python module, documented scenarios, and this guide.
+This bundle is a **single combined program** suitable for its **own small repository**: one Python module, documented scenarios, and this guide. For Ivonne’s original **`P_sha1_*` / `P_sha2_*`** variable sheets and loop pseudocode, see **`docs/variables_equations.md`** and **`docs/simulation_loop.md`** (copied from `Ivonne/docs`).
 
 ---
 
