@@ -10,6 +10,8 @@ Core handoff files:
 | **`SIMULATOR.md`** | This document — math, variables, where outputs live |
 | **`docs/`** | Ivonne **`variables_equations.md`** & **`simulation_loop.md`** (+ **[docs/README.md](docs/README.md)**) |
 
+Workspace folder name may be **`battery simulator`** (with a space); quote paths in the shell (`cd "battery simulator"`).
+
 Energy is in **watt-hours (Wh)**. Power **P** [W], time **t** [s]: **Wh = P × t / 3600**.
 
 ### Repository handoff (supervisor direction)

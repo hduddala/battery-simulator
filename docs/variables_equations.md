@@ -4,7 +4,7 @@
 
 ## Note on naming
 
-Ivonne’s document uses prefixes **`P_sha1_*`** / **`P_sha2_*`**. The merged **`battery_sim`** codebase and **`SIMULATOR.md`** use **`P_mic`**, **`P_proc_shaI_*`**, **`P_proc_shaII_*`**, etc. The physics roles align; see **`SIMULATOR.md`** for JSON ↔ equation mapping.
+Ivonne’s document uses prefixes **`P_sha1_*`** / **`P_sha2_*`**. The merged **battery simulator** codebase and **`SIMULATOR.md`** use **`P_mic`**, **`P_proc_shaI_*`**, **`P_proc_shaII_*`**, etc. The physics roles align; see **`SIMULATOR.md`** for JSON ↔ equation mapping.
 
 ---
 

@@ -1,13 +1,15 @@
-# battery_sim
+# Battery simulator
 
 Shaman **I / II** battery energy simulator: JSON scenarios → time-series SOC, CSV, and structured JSON results.
+
+On disk this repo folder is named **`battery simulator`** (space). On the command line, **always quote** the path, e.g. `cd "battery simulator"`.
 
 This folder is intended to be **its own Git repository** (push only this directory).
 
 ## Quick start
 
 ```bash
-cd battery_sim
+cd "/path/to/battery simulator"
 python3 battery_simulator.py --overwrite
 ```
 
@@ -52,10 +54,9 @@ Outputs land under `output/` or `--out-dir` (ignored by git — regenerate anyti
 From **inside** this folder:
 
 ```bash
-git init
 git add battery_simulator.py scenario.json scenario_spec_complete.json SIMULATOR.md README.md .gitignore docs/
-git commit -m "Initial battery simulator bundle"
-git remote add origin <your-repo-url>
+git commit -m "Your message"
+git remote add origin <your-repo-url>   # first time only; or git remote set-url origin ... 
 git push -u origin main
 ```
 

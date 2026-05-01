@@ -2,7 +2,7 @@
 
 # Simulation Loop Design
 
-The **`battery_sim`** CLI applies this loop at discrete **`time_step_seconds`** steps; see **`battery_simulator.py`** (`BatterySimulator.run`) and **`SIMULATOR.md`** for exact energy terms used in the merged implementation.
+The **battery simulator** CLI applies this loop at discrete **`time_step_seconds`** steps; see **`battery_simulator.py`** (`BatterySimulator.run`) and **`SIMULATOR.md`** for exact energy terms used in the merged implementation.
 
 ---
 
