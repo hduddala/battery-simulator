@@ -639,6 +639,8 @@ class BatterySimulator:
             nodes_out[node_id] = {
                 "node_id": node_id,
                 "role": node.role.value,
+                "parent": node.parent_id,
+                "children": node.children_ids,
                 "capacity_wh": round(cap, 4),
                 "time_series": hist,
                 "series": flat,
@@ -904,6 +906,96 @@ def _flatten_timeseries_rows(result: dict) -> List[dict]:
     return rows
 
 
+def _build_run_log(result: dict, network: SimNetwork) -> dict:
+    """Build a structured run log with per-node topology, battery %, and drain rate."""
+    nodes_log = {}
+
+    for node_id, nd in result["nodes"].items():
+        sim_node = network.get_node(node_id)
+        hist = nd["time_series"]
+
+        timed_entries = []
+        for i, entry in enumerate(hist):
+            if i == 0:
+                drain_rate_pct_per_h = None
+            else:
+                prev = hist[i - 1]
+                dt_h = entry["time_hours"] - prev["time_hours"]
+                if dt_h > 0:
+                    drain_rate_pct_per_h = round(
+                        (prev["battery_percent"] - entry["battery_percent"]) / dt_h, 6
+                    )
+                else:
+                    drain_rate_pct_per_h = None
+
+            timed_entries.append({
+                "time_seconds": entry["time_seconds"],
+                "time_hours": entry["time_hours"],
+                "battery_percent": entry["battery_percent"],
+                "battery_wh": entry["battery_wh"],
+                "drain_rate_pct_per_hour": drain_rate_pct_per_h,
+                "alive": entry["alive"],
+            })
+
+        nodes_log[node_id] = {
+            "node_id": node_id,
+            "role": nd["role"],
+            "parent": sim_node.parent_id if sim_node else None,
+            "children": sim_node.children_ids if sim_node else [],
+            "capacity_wh": nd["capacity_wh"],
+            "final_battery_percent": nd["summary"]["final_battery_percent"],
+            "time_series": timed_entries,
+        }
+
+    return {
+        "run_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "simulation_id": result["simulation_id"],
+        "duration_hours": result["duration_hours"],
+        "total_events_processed": result["total_events_processed"],
+        "nodes": nodes_log,
+    }
+
+
+def _battery_based_rows(result: dict, step_pct: float = 5.0) -> List[dict]:
+    """For each node, emit one row per battery % threshold crossed (every step_pct %).
+
+    Rows are sorted by node_id then battery_percent descending (100 → 0), making it
+    straightforward to plot time as a function of battery level.
+    """
+    rows: List[dict] = []
+    for node_id, nd in result["nodes"].items():
+        series = nd.get("series", {})
+        pct_series = series.get("battery_percent", [])
+        if not pct_series:
+            continue
+
+        role = nd["role"]
+        cap = nd["capacity_wh"]
+        ts_s = series["time_seconds"]
+        ts_h = series["time_hours"]
+        alive_s = series["alive"]
+
+        # Thresholds: 100, 95, 90, … down to just above 0.
+        next_threshold = 100.0
+
+        for i, pct in enumerate(pct_series):
+            while pct <= next_threshold and next_threshold > 0:
+                rows.append({
+                    "node_id": node_id,
+                    "role": role,
+                    "capacity_wh": cap,
+                    "battery_percent_threshold": next_threshold,
+                    "battery_percent_actual": round(pct, 4),
+                    "time_seconds": ts_s[i],
+                    "time_hours": ts_h[i],
+                    "alive": alive_s[i],
+                })
+                next_threshold = round(next_threshold - step_pct, 10)
+
+    rows.sort(key=lambda r: (r["node_id"], -r["battery_percent_threshold"]))
+    return rows
+
+
 def _write_run_summary(result: dict, scen_label: str, out_dir: Path) -> None:
     lines = [
         "Battery simulator — run summary",
@@ -995,11 +1087,12 @@ def main() -> None:
     print(f"scenario: {scen}")
     print(f"output:   {out_dir}")
     result = run_from_dict(clean)
+    network = build_network_from_payload_nodes(clean.get("nodes", []))
 
     rows = _flatten_timeseries_rows(result)
     if rows:
         cols = sorted(rows[0].keys())
-        with open(out_dir / "combined_battery_timeseries.csv", "w", newline="", encoding="utf-8") as f:
+        with open(out_dir / "combined_battery_timeseries_timebased.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=cols)
             w.writeheader()
             for r in rows:
@@ -1025,8 +1118,21 @@ def main() -> None:
     with open(out_dir / "full_result.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
+    with open(out_dir / "run_log.json", "w", encoding="utf-8") as f:
+        json.dump(_build_run_log(result, network), f, indent=2)
+
+    bb_rows = _battery_based_rows(result)
+    if bb_rows:
+        bb_cols = ["node_id", "role", "capacity_wh", "battery_percent_threshold",
+                   "battery_percent_actual", "time_seconds", "time_hours", "alive"]
+        with open(out_dir / "combined_battery_timeseries_batterybased.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=bb_cols)
+            w.writeheader()
+            for r in bb_rows:
+                w.writerow(r)
+
     _write_run_summary(result, str(scen), out_dir)
-    print(f"Done. Chart: {out_dir / 'combined_battery_timeseries.csv'}")
+    print(f"Done. Outputs in: {out_dir}")
 
 
 if __name__ == "__main__":
