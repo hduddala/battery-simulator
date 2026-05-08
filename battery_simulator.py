@@ -307,6 +307,7 @@ class SimNode:
     n_received_wifi: int = 0
     n_received_lora: int = 0
     n_retries_fractional: float = 0.0
+    step_tx_count: int = 0
 
     alive: bool = True
     death_time_seconds: Optional[float] = None
@@ -416,6 +417,26 @@ class BatterySimulator:
 
         self._t_lora = self.config.radio.airtime_per_frame_s()
         self._frames = self.config.radio.frames_per_hop
+        self._topo_order: List[SimNode] = self._topological_sort()
+
+    def _topological_sort(self) -> List[SimNode]:
+        """Return nodes leaves-first so each relay is processed after all its children."""
+        visited: set = set()
+        order: List[SimNode] = []
+
+        def visit(node: SimNode) -> None:
+            if node.node_id in visited:
+                return
+            visited.add(node.node_id)
+            for child_id in node.children_ids:
+                child = self.network.get_node(child_id)
+                if child is not None:
+                    visit(child)
+            order.append(node)
+
+        for node in self.network.nodes.values():
+            visit(node)
+        return order
 
     def _capacity_wh(self, node: SimNode) -> float:
         if node.role == NodeRole.SENSOR:
@@ -452,6 +473,7 @@ class BatterySimulator:
             node.n_received_wifi = 0
             node.n_received_lora = 0
             node.n_retries_fractional = 0.0
+            node.step_tx_count = 0
             node.alive = True
             node.death_time_seconds = None
 
@@ -466,11 +488,19 @@ class BatterySimulator:
 
             self._apply_baseline(dt, next_time)
 
+            # Reset per-step TX counters before Phase A.
+            for node in self.network.nodes.values():
+                node.step_tx_count = 0
+
+            # Phase A: charge sensors for WiFi TX; accumulate step_tx_count on sensors.
             while event_idx < len(events) and events[event_idx].timestamp_s < next_time:
                 ev = events[event_idx]
                 if not self.config.tx_only_if_confirmed or ev.confirmed:
-                    self._process_event(ev, next_time)
+                    self._process_sensor_event(ev, next_time)
                 event_idx += 1
+
+            # Phase B: charge relays bottom-up using children's step_tx_count.
+            self._apply_relay_forwarding(next_time)
 
             for node in self.network.nodes.values():
                 node.record_state(
@@ -492,55 +522,73 @@ class BatterySimulator:
                 continue
             self._add_energy(node, self._baseline_power_w(node) * dt_h, t_end)
 
-    def _process_event(self, event: SimEvent, t_end: float) -> None:
+    def _process_sensor_event(self, event: SimEvent, t_end: float) -> None:
+        """Phase A: charge originating sensor for WiFi TX; mark it transmitted."""
         source = self.network.get_node(event.node_id)
         if source is None or source.role != NodeRole.SENSOR or not source.alive:
             return
-
         source.n_local += 1
+        source.step_tx_count += 1
         self._sensor_tx(source, t_end)
 
-        child = source
-        parent = self.network.get_node(source.parent_id) if source.parent_id else None
-        while parent is not None:
-            if not parent.alive:
-                break
-            self._relay_receive(parent, child, t_end)
-            self._relay_process(parent, t_end)
-            if parent.role != NodeRole.COMMAND and parent.parent_id is not None:
-                self._relay_transmit(parent, t_end)
-            child = parent
-            parent = self.network.get_node(parent.parent_id) if parent.parent_id else None
+    def _apply_relay_forwarding(self, t_end: float) -> None:
+        """Phase B: walk nodes leaves-first; each relay reads children's step_tx_count."""
+        for node in self._topo_order:
+            if node.role == NodeRole.SENSOR or self._gateway_infinite(node):
+                continue
+            if not node.alive:
+                continue
+
+            n_wifi = 0
+            n_lora = 0
+            for child_id in node.children_ids:
+                child = self.network.get_node(child_id)
+                if child is None or child.step_tx_count == 0:
+                    continue
+                if child.role == NodeRole.SENSOR:
+                    n_wifi += child.step_tx_count
+                else:
+                    n_lora += child.step_tx_count
+
+            n_rx = n_wifi + n_lora
+            if n_rx == 0:
+                continue
+
+            self._relay_receive(node, n_wifi, n_lora, t_end)
+            self._relay_process(node, n_rx, t_end)
+            if node.role != NodeRole.COMMAND and node.parent_id is not None:
+                self._relay_transmit(node, n_rx, t_end)
+                node.step_tx_count = n_rx
 
     def _sensor_tx(self, sensor: SimNode, t_end: float) -> None:
         s1 = self.config.shaman_i
         on_s = s1.t_tx_wifi * self._frames
         self._add_energy(sensor, _wh_from_w_s(s1.P_wifi_tx, on_s), t_end)
 
-    def _relay_receive(self, relay: SimNode, child: SimNode, t_end: float) -> None:
+    def _relay_receive(self, relay: SimNode, n_wifi: int, n_lora: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
-        if child.role == NodeRole.SENSOR:
-            relay.n_received_wifi += 1
-            self._add_energy(relay, _wh_from_w_s(s2.P_wifi_rx, s2.t_rx_wifi), t_end)
-        else:
-            relay.n_received_lora += 1
-            self._add_energy(relay, _wh_from_w_s(s2.P_lora_rx, self._t_lora), t_end)
+        if n_wifi > 0:
+            relay.n_received_wifi += n_wifi
+            self._add_energy(relay, n_wifi * _wh_from_w_s(s2.P_wifi_rx, s2.t_rx_wifi), t_end)
+        if n_lora > 0:
+            relay.n_received_lora += n_lora
+            self._add_energy(relay, n_lora * _wh_from_w_s(s2.P_lora_rx, self._t_lora), t_end)
 
-    def _relay_process(self, relay: SimNode, t_end: float) -> None:
+    def _relay_process(self, relay: SimNode, n_packets: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
         delta_w = max(0.0, s2.P_proc_shaII_active - s2.P_proc_shaII_sleep)
-        self._add_energy(relay, _wh_from_w_s(delta_w, s2.t_proc_shaII), t_end)
+        self._add_energy(relay, n_packets * _wh_from_w_s(delta_w, s2.t_proc_shaII), t_end)
 
-    def _relay_transmit(self, relay: SimNode, t_end: float) -> None:
+    def _relay_transmit(self, relay: SimNode, n_packets: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
         hop_on_s = self._t_lora * self._frames
-        self._add_energy(relay, _wh_from_w_s(s2.P_lora_tx, hop_on_s), t_end)
+        self._add_energy(relay, n_packets * _wh_from_w_s(s2.P_lora_tx, hop_on_s), t_end)
 
         r = max(0.0, float(self.config.radio.avg_retries_per_tx))
         if r > 0 and relay.alive:
@@ -548,8 +596,8 @@ class BatterySimulator:
             e_one = _wh_from_w_s(s2.P_lora_tx, hop_on_s) + _wh_from_w_s(
                 s2.P_backoff, s2.t_backoff
             )
-            self._add_energy(relay, r * e_one, t_end)
-            relay.n_retries_fractional += r
+            self._add_energy(relay, n_packets * r * e_one, t_end)
+            relay.n_retries_fractional += n_packets * r
 
     def _build_output(self) -> Dict[str, Any]:
         nodes_out: Dict[str, Any] = {}
