@@ -307,6 +307,7 @@ class SimNode:
     n_received_wifi: int = 0
     n_received_lora: int = 0
     n_retries_fractional: float = 0.0
+    step_tx_count: int = 0
 
     alive: bool = True
     death_time_seconds: Optional[float] = None
@@ -416,6 +417,26 @@ class BatterySimulator:
 
         self._t_lora = self.config.radio.airtime_per_frame_s()
         self._frames = self.config.radio.frames_per_hop
+        self._topo_order: List[SimNode] = self._topological_sort()
+
+    def _topological_sort(self) -> List[SimNode]:
+        """Return nodes leaves-first so each relay is processed after all its children."""
+        visited: set = set()
+        order: List[SimNode] = []
+
+        def visit(node: SimNode) -> None:
+            if node.node_id in visited:
+                return
+            visited.add(node.node_id)
+            for child_id in node.children_ids:
+                child = self.network.get_node(child_id)
+                if child is not None:
+                    visit(child)
+            order.append(node)
+
+        for node in self.network.nodes.values():
+            visit(node)
+        return order
 
     def _capacity_wh(self, node: SimNode) -> float:
         if node.role == NodeRole.SENSOR:
@@ -452,6 +473,7 @@ class BatterySimulator:
             node.n_received_wifi = 0
             node.n_received_lora = 0
             node.n_retries_fractional = 0.0
+            node.step_tx_count = 0
             node.alive = True
             node.death_time_seconds = None
 
@@ -466,11 +488,19 @@ class BatterySimulator:
 
             self._apply_baseline(dt, next_time)
 
+            # Reset per-step TX counters before Phase A.
+            for node in self.network.nodes.values():
+                node.step_tx_count = 0
+
+            # Phase A: charge sensors for WiFi TX; accumulate step_tx_count on sensors.
             while event_idx < len(events) and events[event_idx].timestamp_s < next_time:
                 ev = events[event_idx]
                 if not self.config.tx_only_if_confirmed or ev.confirmed:
-                    self._process_event(ev, next_time)
+                    self._process_sensor_event(ev, next_time)
                 event_idx += 1
+
+            # Phase B: charge relays bottom-up using children's step_tx_count.
+            self._apply_relay_forwarding(next_time)
 
             for node in self.network.nodes.values():
                 node.record_state(
@@ -492,55 +522,73 @@ class BatterySimulator:
                 continue
             self._add_energy(node, self._baseline_power_w(node) * dt_h, t_end)
 
-    def _process_event(self, event: SimEvent, t_end: float) -> None:
+    def _process_sensor_event(self, event: SimEvent, t_end: float) -> None:
+        """Phase A: charge originating sensor for WiFi TX; mark it transmitted."""
         source = self.network.get_node(event.node_id)
         if source is None or source.role != NodeRole.SENSOR or not source.alive:
             return
-
         source.n_local += 1
+        source.step_tx_count += 1
         self._sensor_tx(source, t_end)
 
-        child = source
-        parent = self.network.get_node(source.parent_id) if source.parent_id else None
-        while parent is not None:
-            if not parent.alive:
-                break
-            self._relay_receive(parent, child, t_end)
-            self._relay_process(parent, t_end)
-            if parent.role != NodeRole.COMMAND and parent.parent_id is not None:
-                self._relay_transmit(parent, t_end)
-            child = parent
-            parent = self.network.get_node(parent.parent_id) if parent.parent_id else None
+    def _apply_relay_forwarding(self, t_end: float) -> None:
+        """Phase B: walk nodes leaves-first; each relay reads children's step_tx_count."""
+        for node in self._topo_order:
+            if node.role == NodeRole.SENSOR or self._gateway_infinite(node):
+                continue
+            if not node.alive:
+                continue
+
+            n_wifi = 0
+            n_lora = 0
+            for child_id in node.children_ids:
+                child = self.network.get_node(child_id)
+                if child is None or child.step_tx_count == 0:
+                    continue
+                if child.role == NodeRole.SENSOR:
+                    n_wifi += child.step_tx_count
+                else:
+                    n_lora += child.step_tx_count
+
+            n_rx = n_wifi + n_lora
+            if n_rx == 0:
+                continue
+
+            self._relay_receive(node, n_wifi, n_lora, t_end)
+            self._relay_process(node, n_rx, t_end)
+            if node.role != NodeRole.COMMAND and node.parent_id is not None:
+                self._relay_transmit(node, n_rx, t_end)
+                node.step_tx_count = n_rx
 
     def _sensor_tx(self, sensor: SimNode, t_end: float) -> None:
         s1 = self.config.shaman_i
         on_s = s1.t_tx_wifi * self._frames
         self._add_energy(sensor, _wh_from_w_s(s1.P_wifi_tx, on_s), t_end)
 
-    def _relay_receive(self, relay: SimNode, child: SimNode, t_end: float) -> None:
+    def _relay_receive(self, relay: SimNode, n_wifi: int, n_lora: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
-        if child.role == NodeRole.SENSOR:
-            relay.n_received_wifi += 1
-            self._add_energy(relay, _wh_from_w_s(s2.P_wifi_rx, s2.t_rx_wifi), t_end)
-        else:
-            relay.n_received_lora += 1
-            self._add_energy(relay, _wh_from_w_s(s2.P_lora_rx, self._t_lora), t_end)
+        if n_wifi > 0:
+            relay.n_received_wifi += n_wifi
+            self._add_energy(relay, n_wifi * _wh_from_w_s(s2.P_wifi_rx, s2.t_rx_wifi), t_end)
+        if n_lora > 0:
+            relay.n_received_lora += n_lora
+            self._add_energy(relay, n_lora * _wh_from_w_s(s2.P_lora_rx, self._t_lora), t_end)
 
-    def _relay_process(self, relay: SimNode, t_end: float) -> None:
+    def _relay_process(self, relay: SimNode, n_packets: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
         delta_w = max(0.0, s2.P_proc_shaII_active - s2.P_proc_shaII_sleep)
-        self._add_energy(relay, _wh_from_w_s(delta_w, s2.t_proc_shaII), t_end)
+        self._add_energy(relay, n_packets * _wh_from_w_s(delta_w, s2.t_proc_shaII), t_end)
 
-    def _relay_transmit(self, relay: SimNode, t_end: float) -> None:
+    def _relay_transmit(self, relay: SimNode, n_packets: int, t_end: float) -> None:
         if self._gateway_infinite(relay):
             return
         s2 = self.config.shaman_ii
         hop_on_s = self._t_lora * self._frames
-        self._add_energy(relay, _wh_from_w_s(s2.P_lora_tx, hop_on_s), t_end)
+        self._add_energy(relay, n_packets * _wh_from_w_s(s2.P_lora_tx, hop_on_s), t_end)
 
         r = max(0.0, float(self.config.radio.avg_retries_per_tx))
         if r > 0 and relay.alive:
@@ -548,8 +596,8 @@ class BatterySimulator:
             e_one = _wh_from_w_s(s2.P_lora_tx, hop_on_s) + _wh_from_w_s(
                 s2.P_backoff, s2.t_backoff
             )
-            self._add_energy(relay, r * e_one, t_end)
-            relay.n_retries_fractional += r
+            self._add_energy(relay, n_packets * r * e_one, t_end)
+            relay.n_retries_fractional += n_packets * r
 
     def _build_output(self) -> Dict[str, Any]:
         nodes_out: Dict[str, Any] = {}
@@ -591,6 +639,8 @@ class BatterySimulator:
             nodes_out[node_id] = {
                 "node_id": node_id,
                 "role": node.role.value,
+                "parent": node.parent_id,
+                "children": node.children_ids,
                 "capacity_wh": round(cap, 4),
                 "time_series": hist,
                 "series": flat,
@@ -856,6 +906,96 @@ def _flatten_timeseries_rows(result: dict) -> List[dict]:
     return rows
 
 
+def _build_run_log(result: dict, network: SimNetwork) -> dict:
+    """Build a structured run log with per-node topology, battery %, and drain rate."""
+    nodes_log = {}
+
+    for node_id, nd in result["nodes"].items():
+        sim_node = network.get_node(node_id)
+        hist = nd["time_series"]
+
+        timed_entries = []
+        for i, entry in enumerate(hist):
+            if i == 0:
+                drain_rate_pct_per_h = None
+            else:
+                prev = hist[i - 1]
+                dt_h = entry["time_hours"] - prev["time_hours"]
+                if dt_h > 0:
+                    drain_rate_pct_per_h = round(
+                        (prev["battery_percent"] - entry["battery_percent"]) / dt_h, 6
+                    )
+                else:
+                    drain_rate_pct_per_h = None
+
+            timed_entries.append({
+                "time_seconds": entry["time_seconds"],
+                "time_hours": entry["time_hours"],
+                "battery_percent": entry["battery_percent"],
+                "battery_wh": entry["battery_wh"],
+                "drain_rate_pct_per_hour": drain_rate_pct_per_h,
+                "alive": entry["alive"],
+            })
+
+        nodes_log[node_id] = {
+            "node_id": node_id,
+            "role": nd["role"],
+            "parent": sim_node.parent_id if sim_node else None,
+            "children": sim_node.children_ids if sim_node else [],
+            "capacity_wh": nd["capacity_wh"],
+            "final_battery_percent": nd["summary"]["final_battery_percent"],
+            "time_series": timed_entries,
+        }
+
+    return {
+        "run_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "simulation_id": result["simulation_id"],
+        "duration_hours": result["duration_hours"],
+        "total_events_processed": result["total_events_processed"],
+        "nodes": nodes_log,
+    }
+
+
+def _battery_based_rows(result: dict, step_pct: float = 5.0) -> List[dict]:
+    """For each node, emit one row per battery % threshold crossed (every step_pct %).
+
+    Rows are sorted by node_id then battery_percent descending (100 → 0), making it
+    straightforward to plot time as a function of battery level.
+    """
+    rows: List[dict] = []
+    for node_id, nd in result["nodes"].items():
+        series = nd.get("series", {})
+        pct_series = series.get("battery_percent", [])
+        if not pct_series:
+            continue
+
+        role = nd["role"]
+        cap = nd["capacity_wh"]
+        ts_s = series["time_seconds"]
+        ts_h = series["time_hours"]
+        alive_s = series["alive"]
+
+        # Thresholds: 100, 95, 90, … down to just above 0.
+        next_threshold = 100.0
+
+        for i, pct in enumerate(pct_series):
+            while pct <= next_threshold and next_threshold > 0:
+                rows.append({
+                    "node_id": node_id,
+                    "role": role,
+                    "capacity_wh": cap,
+                    "battery_percent_threshold": next_threshold,
+                    "battery_percent_actual": round(pct, 4),
+                    "time_seconds": ts_s[i],
+                    "time_hours": ts_h[i],
+                    "alive": alive_s[i],
+                })
+                next_threshold = round(next_threshold - step_pct, 10)
+
+    rows.sort(key=lambda r: (r["node_id"], -r["battery_percent_threshold"]))
+    return rows
+
+
 def _write_run_summary(result: dict, scen_label: str, out_dir: Path) -> None:
     lines = [
         "Battery simulator — run summary",
@@ -947,11 +1087,12 @@ def main() -> None:
     print(f"scenario: {scen}")
     print(f"output:   {out_dir}")
     result = run_from_dict(clean)
+    network = build_network_from_payload_nodes(clean.get("nodes", []))
 
     rows = _flatten_timeseries_rows(result)
     if rows:
         cols = sorted(rows[0].keys())
-        with open(out_dir / "combined_battery_timeseries.csv", "w", newline="", encoding="utf-8") as f:
+        with open(out_dir / "combined_battery_timeseries_timebased.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=cols)
             w.writeheader()
             for r in rows:
@@ -977,8 +1118,21 @@ def main() -> None:
     with open(out_dir / "full_result.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
+    with open(out_dir / "run_log.json", "w", encoding="utf-8") as f:
+        json.dump(_build_run_log(result, network), f, indent=2)
+
+    bb_rows = _battery_based_rows(result)
+    if bb_rows:
+        bb_cols = ["node_id", "role", "capacity_wh", "battery_percent_threshold",
+                   "battery_percent_actual", "time_seconds", "time_hours", "alive"]
+        with open(out_dir / "combined_battery_timeseries_batterybased.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=bb_cols)
+            w.writeheader()
+            for r in bb_rows:
+                w.writerow(r)
+
     _write_run_summary(result, str(scen), out_dir)
-    print(f"Done. Chart: {out_dir / 'combined_battery_timeseries.csv'}")
+    print(f"Done. Outputs in: {out_dir}")
 
 
 if __name__ == "__main__":
